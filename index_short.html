@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Attention and Control</title>
+  <script src="https://unpkg.com/jspsych@8.2.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@2.1.0"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-survey-text@1.1.3"></script>
+  <script src="https://unpkg.com/@jspsych-contrib/plugin-survey-number@2.0.0"></script>
+  <script src="https://unpkg.com/@jspsych-contrib/plugin-pipe"></script>
+  <link href="https://unpkg.com/jspsych@8.2.1/css/jspsych.css" rel="stylesheet"/>
+
+  <style>
+    body { background-color: #f5f5f5; }
+    .no-cursor { cursor: none; }
+  </style>
+
+  <!-- Inline Wheel Plugin (no initial cooldown) -->
+  <script>
+  var jsPsychPluginWheel = (function(jspsych) {
+    "use strict";
+    const info = {
+      name: "plugin-wheel",
+      version: "0.0.1",
+      parameters: {
+        spinSpeed:        { type: jspsych.ParameterType.INT,   default: 6 },
+        cooldownDuration: { type: jspsych.ParameterType.INT,   default: 2000 },
+        blinkDuration:    { type: jspsych.ParameterType.INT,   default: 200 },
+        blinkPauseMin:    { type: jspsych.ParameterType.INT,   default: 400 },
+        blinkPauseMax:    { type: jspsych.ParameterType.INT,   default: 2000 },
+        isDot:            { type: jspsych.ParameterType.BOOL,  default: false }
+      }
+    };
+    class WheelPlugin {
+      constructor(jsPsych) { this.jsPsych = jsPsych; }
+      trial(display_element, trial) {
+        if (!WheelPlugin.cssAdded) {
+          const style = document.createElement("style");
+          style.innerHTML = `
+            #circle { width:300px;height:300px;border-radius:50%;background:gray;position:relative;margin:100px auto; }
+            #circle.cooldown { background:rgb(186,186,186); }
+            #target-line { width:4px;height:150px;background:black;position:absolute;top:0;left:calc(50% - 2px);transform-origin:center bottom;z-index:1; }
+            #target-line-dot { width:4px;height:4px;background:black;border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:1; }
+            #fixed-line { width:2px;height:150px;background:black;position:absolute;top:0;left:calc(50% - 1px);transform-origin:bottom;z-index:0; }
+            #fixed-line.cooldown { background:gray; }
+            #red-dot { width:20px;height:20px;background:red;border-radius:50%;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2; }
+          `;
+          document.head.appendChild(style);
+          WheelPlugin.cssAdded = true;
+        }
+
+        display_element.innerHTML = `
+          <div id="circle">
+            <div id="target-line"></div>
+            <div id="target-line-dot"></div>
+            <div id="fixed-line"></div>
+            <div id="red-dot"></div>
+          </div>`;
+
+        let blinkCount=0, angle=0, spinning=true, isCooldown=false, spinCount=0;
+        const timeouts = [];
+        const schedule = (fn,ms)=> timeouts.push(setTimeout(fn,ms));
+
+        const circle     = document.getElementById("circle");
+        const targetLine = document.getElementById("target-line");
+        const redDot     = document.getElementById("red-dot");
+
+        if (!trial.isDot) redDot.style.visibility="hidden";
+
+        function cooldown(){
+          isCooldown=true;
+          circle.classList.add("cooldown");
+          schedule(()=>{
+            circle.classList.remove("cooldown");
+            isCooldown=false;
+          }, trial.cooldownDuration);
+        }
+
+        function spin(){
+          if(spinning){
+            angle=(angle+trial.spinSpeed)%360;
+            targetLine.style.transform=`rotate(${angle}deg)`;
+          }
+          requestAnimationFrame(spin);
+        }
+
+        function blink(){
+          redDot.style.visibility="visible";
+          blinkCount++;
+          schedule(()=>{
+            redDot.style.visibility="hidden";
+            schedule(blink,
+              Math.random()*(trial.blinkPauseMax-trial.blinkPauseMin)
+              + trial.blinkPauseMin);
+          }, trial.blinkDuration);
+        }
+
+        const startSeq = ()=>{
+          if(spinCount<3){
+            if(spinCount>0) cooldown();  // freeze only after spins 1 & 2
+            spinning=true;
+          } else {
+            timeouts.forEach(clearTimeout);
+            document.removeEventListener("keydown", keyHandler);
+            display_element.innerHTML="";
+            this.jsPsych.finishTrial({ blinkCount, angle, spinSpeed: trial.spinSpeed });
+          }
+        };
+
+        let allowStop=false; schedule(()=>allowStop=true,500);
+        const keyHandler = e=>{
+          if(e.code==="Space" && allowStop && !isCooldown && spinning){
+            spinning=false;
+            schedule(()=>{
+              spinCount++;
+              startSeq();
+            },500);
+          }
+        };
+        document.addEventListener("keydown", keyHandler);
+
+        startSeq();
+        spin();
+        if(trial.isDot) blink();
+      }
+    }
+    WheelPlugin.info     = info;
+    WheelPlugin.cssAdded = false;
+    return WheelPlugin;
+  })(jsPsychModule);
+  </script>
+</head>
+
+<body>
+  <script>
+    const jsPsych = initJsPsych({
+      on_finish: ()=> window.location="https://app.prolific.co/submissions/complete?cc=C5NWS2LW"
+    });
+
+    // Prolific metadata
+    const subject_id = jsPsych.data.getURLVariable('PROLIFIC_PID');
+    const study_id   = jsPsych.data.getURLVariable('STUDY_ID');
+    const session_id = jsPsych.data.getURLVariable('SESSION_ID');
+    const filename   = `${subject_id}.csv`;
+    jsPsych.data.addProperties({ subject_id, study_id, session_id });
+
+    // 0) Up‐front declarations
+    const DO_DOT       = Math.random() > 0.5;
+    let averageDeviation = 0;
+    var timeline       = [];
+    const spin_speeds = [8, 10];
+
+    // Shared SVG rating
+    const rating_scale_visualization = `
+      <svg height="200" width="600">
+        <g transform="translate(50 0)">
+          <g transform="translate(30 50) scale(1 1)">
+            <text x="0"   y="0" fill="black" font-size="30">1</text>
+            <text x="100" y="0" fill="black" font-size="30">2</text>
+            <text x="200" y="0" fill="black" font-size="30">3</text>
+            <text x="300" y="0" fill="black" font-size="30">4</text>
+            <text x="400" y="0" fill="black" font-size="30">5</text>
+          </g>
+          <g transform="translate(-60 60) scale(1 1)">
+            <line x1="100" y1="50" x2="500" y2="50" style="stroke:black;stroke-width:2" />
+            <line x1="100" y1="1"  x2="100" y2="50" style="stroke:black;stroke-width:2" />
+            <line x1="200" y1="1"  x2="200" y2="50" style="stroke:black;stroke-width:2" />
+            <line x1="300" y1="1"  x2="300" y2="50" style="stroke:black;stroke-width:2" />
+            <line x1="400" y1="1"  x2="400" y2="50" style="stroke:black;stroke-width:2" />
+            <line x1="500" y1="1"  x2="500" y2="50" style="stroke:black;stroke-width:2" />
+          </g>
+          <g transform="translate(30 150) scale(1 1)">
+            <text x="-20" y="0" fill="black" font-size="20">No control at all</text>
+            <text x="300" y="0" fill="black" font-size="20">Perfect control</text>
+          </g>
+        </g>
+      </svg>`;
+
+    // Practice templates
+    const practice_wheel = {
+      type: jsPsychPluginWheel,
+      spinSpeed: 6,
+      cooldownDuration:2000,
+      blinkDuration:300,
+      blinkPauseMin:800,
+      blinkPauseMax:2000,
+      isDot: DO_DOT,
+      data:{ phase:'practice', trial_type:'plugin-wheel' }
+    };
+    const dot_number_entry = {
+      type: jsPsychSurveyNumber,
+      questions:[{
+        prompt:'How many times did the red dot blink?',
+        name:'reported_dot_count',
+        required:true
+      }]
+    };
+
+    // 1) Welcome
+    timeline.push({
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus:'<p>Hello! Thank you for participating in our study.</p><p>Press any key to begin.</p>'
+    });
+
+    // 2) Instructions
+    const instructions_no_dot = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: '<div style="max-width: 900px; margin: auto;"><p>In the following experiment you will be shown a grey circle with two lines, one that is static, and one that spins. You will be asked to stop the moving line as close as possible to the still line by pressing the spacebar.</p><p>Each time you must press the spacebar to stop the moving line, and press it once again to restart. The circle will change color and not respond for a brief second after restarting.</p><p>Every three times you stop the moving line you will have completed a trial. At the end of each trial you will be prompted to rate your control over where the spinning line stops using a 1-5 scale, a score of 1 indicates no control and a score of 5 indicates full control.</p><p>Press any key to begin.</p></div>'
+    };
+    const instructions_dot = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: '<div style="max-width: 900px; margin: auto;"><p>In the following experiment you will be shown a grey circle with two lines, one that is static, and one that spins. You will be asked to stop the moving line as close as possible to the still line by pressing the spacebar.</p><p>Each time you must press the spacebar to stop the moving line, and press it once again to restart. The circle will change color and not respond for a brief second after restarting.</p><p>Every three times you stop the moving line you will have completed a trial. At the end of each trial you will be prompted to rate your control over where the spinning line stops using a 1-5 scale, a score of 1 indicates no control and a score of 5 indicates full control.</p><p>While you are doing this a red dot will flash every few seconds in the center of the spinning wheel. Do your best to keep track of the number of times it flashes throughout the entire trial. At the end of each trial you will be asked to report this number.</p><p>Press any key to begin.</p></div>'
+    };
+
+    if (DO_DOT) {
+      timeline.push(instructions_dot);
+    } else {
+      timeline.push(instructions_no_dot);
+    }
+
+    // 3) Practice instructions
+    timeline.push({
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus:`<div style="max-width:900px; margin:auto;">
+                  <p>After pressing any key, you will complete 2 practice trials. Each practice trial is three instances of the stopping game. Use this time to familiarize yourself with the game.</p>
+                  <p>Press any key to begin the practice trials.</p>
+                </div>`
+    });
+
+    // 4) Practice dot‐count entry
+    const practice_dot_entry = {
+      timeline: [{
+        type: jsPsychSurveyNumber,
+       questions: [{
+          prompt: "How many times did the red dot blink?",
+          name: "reported_dot_count",
+          required: true
+       }],
+       data: {
+          phase: 'practice',
+          task:  'dot_count'
+       }
+     }],
+      conditional_function: () => DO_DOT
+    };
+
+    // 4.5) Practice block 
+    timeline.push({
+       timeline: [
+       practice_wheel,
+        {
+          type: jsPsychHtmlKeyboardResponse,
+         stimulus: "How much control did you feel you had over where the spinning line stops?",
+          prompt:   rating_scale_visualization,
+          choices: ['1','2','3','4','5'],
+          data:    { phase: 'practice', task: 'rating' }
+       },
+        practice_dot_entry 
+      ],
+      repetitions: 2
+    });
+
+    // 5) Practice feedback
+    timeline.push({
+     type: jsPsychHtmlKeyboardResponse,
+     stimulus: () => {
+        const d = jsPsych.data.get().filter({ phase: 'practice', trial_type: 'plugin-wheel' });
+       const totalBlinks = d.select('blinkCount').sum();
+       const angles = d.select('angle').values.map(a => Math.abs(a > 180 ? 360 - a : a));
+        const avgError = (angles.reduce((s, n) => s + n, 0) / angles.length).toFixed(1);
+
+    let dotTxt = "";
+    if (DO_DOT) {
+      const dotTrials = jsPsych.data.get()
+        .filter({ phase: 'practice', task: 'dot_count' })
+        .values(); // gives an array of raw trial objects
+      const reported = dotTrials
+        .map(tr => parseInt(tr.response.reported_dot_count, 10) || 0)
+        .reduce((sum, v) => sum + v, 0);
+      dotTxt = `<p>Actual dot flashes: <strong>${totalBlinks}</strong>; you reported: <strong>${reported}</strong>.</p>`;
+    }
+
+    // store for main intro
+    averageDeviation = parseFloat(avgError);
+
+    return `
+      <div style="max-width:900px; margin:auto; text-align:center;">
+        <p><strong>Practice Complete!</strong></p>
+        <p>Your average stopping error across 6 spins was <strong>${avgError}°</strong> from the target line.</p>
+        ${dotTxt}
+        <p>Press any key to begin the main experiment.</p>
+      </div>`;
+  }
+});
+
+    // 6) Main intro
+    timeline.push({
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus:`<div style="max-width: 900px; margin: auto;">
+                  <p>After pressing any key, you will enter the main experiment, consisting of several trials of three spins each.</p>
+                  <p>From this point on, your responses will be recorded for all trials. Please try your best in each game!</p>
+                  <p>Press any key to begin.</p>
+                </div>`
+    });
+
+    // 7) Main block
+    const main_wheel = {
+     type: jsPsychPluginWheel,
+     spinSpeed:       jsPsych.timelineVariable('spinSpeed'),
+     cooldownDuration:2000,
+     blinkDuration:   300,
+     blinkPauseMin:   800,
+     blinkPauseMax:   2000,
+     isDot:           DO_DOT,
+     data:            { phase:'main', trial_type:'plugin-wheel' }
+    };
+
+    const main_rating = {
+     type: jsPsychHtmlKeyboardResponse,
+     stimulus: "How much control did you feel you had over where the spinning line stops?",
+     prompt: rating_scale_visualization,
+     choices: ['1','2','3','4','5'],
+     data: { phase:'main', task:'rating' }
+    };
+
+    const main_dot_entry = {
+     timeline: [{
+       type: jsPsychSurveyNumber,
+       questions: [{
+         prompt: 'How many times did the red dot blink?',
+         name: 'reported_dot_count',
+          required: true
+        }],
+        data: { phase:'main', task:'dot_count' }
+     }],
+     conditional_function: () => DO_DOT
+    };
+
+    timeline.push({
+     timeline: [ main_wheel, main_rating, main_dot_entry ],
+     timeline_variables: spin_speeds.map(s => ({ spinSpeed: s })),
+     randomize_order: true,
+     on_finish: data => {
+        jsPsych.data.addProperties({ spinSpeed: data.spinSpeed });
+        const errs = jsPsych.data.get()
+          .filter({ phase:'main', trial_type:'plugin-wheel' })
+          .select('angle').values
+          .map(a=>Math.abs(a>180?360-a:a));
+       averageDeviation = errs.length
+         ? errs.reduce((sum,n)=>sum+n,0)/errs.length
+         : 0;
+      }
+    });
+
+    // 8) Main feedback
+    timeline.push({
+      type: jsPsychHtmlKeyboardResponse,
+     stimulus: () => {
+       const d = jsPsych.data.get().filter({ phase:'main', trial_type:'plugin-wheel' });
+       const totalBlinks = d.select('blinkCount').sum();
+        const errs = d.select('angle').values
+         .map(a => Math.abs(a > 180 ? 360 - a : a));
+        const avgError = (errs.reduce((s,n) => s + n, 0) / errs.length).toFixed(1);
+
+    let dotTxt = "";
+    if (DO_DOT) {
+      const dotTrials = jsPsych.data.get()
+        .filter({ phase:'main', task:'dot_count' })
+        .values(); // array of raw trial objects
+      const reported = dotTrials
+        .map(tr => parseInt(tr.response.reported_dot_count, 10) || 0)
+        .reduce((sum, v) => sum + v, 0);
+      dotTxt = `<p>Actual dot flashes: <strong>${totalBlinks}</strong>; you reported: <strong>${reported}</strong>.</p>`;
+    }
+
+    return `
+      <div style="max-width:900px; margin:auto; text-align:center;">
+        <p><strong>All Done!</strong></p>
+        <p>Your average stopping error was <strong>${avgError}°</strong> from the target line.</p>
+        ${dotTxt}
+        <p>Press any key to continue.</p>
+      </div>`;
+     }
+    });
+
+    // 9) Survey & Save
+    timeline.push({
+      type: jsPsychSurveyText,
+      questions:[{ prompt:'Did you experience any technical difficulties? If so, please describe:' }]
+    });
+    timeline.push({
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus:`<div style="max-width: 900px; margin: auto;">
+                  <p>Thank you for participating!</p>
+                  <p>This study was intended to test your sense of agency and attention based on your self-reported level of control over the task. We are comparing the perceived level of control between a group completing a split attention task and a single task.</p>
+                  <p>Again, thank you for your time. Press any key to finish.</p>
+                </div>`
+    });
+    timeline.push({
+      type: jsPsychPipe,
+      action:'save',
+      experiment_id:'S90tJuIbTHYz',
+      filename: filename,
+      data_string:()=>jsPsych.data.get().csv()
+    });
+
+    // 10) Run
+    jsPsych.run(timeline);
+  </script>
+</body>
+</html>
